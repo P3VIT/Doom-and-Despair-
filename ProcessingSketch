@@ -1,0 +1,366 @@
+
+import processing.serial.*;
+
+Serial arduino;
+String[] ports;
+
+int PORT_INDEX = 3;
+
+// Keyboard state
+boolean wDown = false;
+boolean aDown = false;
+boolean sDown = false;
+boolean dDown = false;
+
+// Speed slider
+int speed = 200;
+boolean draggingSlider = false;
+int sliderX = 70;
+int sliderY = 410;
+int sliderW = 360;
+
+// Connection status
+String statusText = "Connecting...";
+
+// Motor command tracking
+int lastSend = 0;
+int lastLeft = 999;
+int lastRight = 999;
+
+// Encoder movement status
+boolean beamBroken = false;
+
+// Last time Arduino reported movement
+int lastMovementMessage = 0;
+
+// How long movement remains active without a new
+// movement message. Must match Arduino reporting interval.
+int movementTimeout = 350;
+
+void setup() {
+  size(500, 510);
+  surface.setTitle("Robot Controller");
+
+  ports = Serial.list();
+
+  println("Available serial ports:");
+  printArray(ports);
+
+  if (ports.length > 0) {
+    if (PORT_INDEX >= 0 && PORT_INDEX < ports.length) {
+      try {
+        arduino = new Serial(this, ports[PORT_INDEX], 2000000);
+        arduino.clear();
+        arduino.bufferUntil('\n');
+
+        statusText = "Connected: " + ports[PORT_INDEX];
+      }
+      catch (Exception e) {
+        statusText = "Connection failed - check port";
+        println(e);
+      }
+    } else {
+      statusText = "Invalid port index - check console";
+    }
+  } else {
+    statusText = "No serial ports found";
+  }
+}
+
+void draw() {
+  background(245);
+
+  int[] motors = calculateMotors();
+
+  // Send motor commands
+  if (arduino != null && millis() - lastSend >= 50) {
+    sendMotors(motors[0], motors[1]);
+    lastSend = millis();
+  }
+
+  // Prevent stale movement status if communication stops
+  if (millis() - lastMovementMessage > movementTimeout) {
+    beamBroken = false;
+  }
+
+  drawHeader();
+  drawKeyIndicators();
+  drawDirectionPad();
+  drawSpeedSlider();
+  drawStatus(motors[0], motors[1]);
+}
+
+// Receive encoder status from Arduino
+void serialEvent(Serial port) {
+  String message = port.readStringUntil('\n');
+
+  if (message == null) return;
+
+  message = trim(message);
+
+  if (message.equals("BEAM_BROKEN")) {
+    beamBroken = true;
+    lastMovementMessage = millis();
+  }
+  else if (message.equals("BEAM_CLEAR")) {
+    beamBroken = false;
+    lastMovementMessage = millis();
+  }
+}
+
+// Calculate motor commands
+int[] calculateMotors() {
+  // W = spin left, S = spin right
+  // A = forward, D = reverse
+  // This preserves your original motor mapping.
+
+  float forward = 0;
+  float turn = 0;
+
+  if (aDown) forward += 1;
+  if (dDown) forward -= 1;
+
+  if (wDown) turn -= 1;
+  if (sDown) turn += 1;
+
+  int left = round(speed * (forward + turn));
+  int right = round(speed * (forward - turn));
+
+  left = constrain(left, -255, 255);
+  right = constrain(right, -255, 255);
+
+  return new int[] {left, right};
+}
+
+void sendMotors(int left, int right) {
+  if (left != lastLeft || right != lastRight) {
+    arduino.write(left + "," + right + "\n");
+
+    lastLeft = left;
+    lastRight = right;
+  }
+}
+
+void drawHeader() {
+  fill(30);
+  textAlign(CENTER);
+  textSize(22);
+  text("ROBOT CONTROLLER", width / 2, 35);
+
+  textSize(12);
+  fill(100);
+  text("Hold WASD to drive | Release to stop",
+       width / 2, 58);
+}
+
+void drawKeyIndicators() {
+  textAlign(CENTER);
+  textSize(14);
+  fill(50);
+  text("KEYBOARD INPUT", width / 2, 90);
+
+  drawKey(250, 125, "W", wDown);
+  drawKey(195, 180, "A", aDown);
+  drawKey(250, 180, "S", sDown);
+  drawKey(305, 180, "D", dDown);
+}
+
+void drawKey(int x, int y, String label, boolean active) {
+  rectMode(CENTER);
+
+  stroke(active ? color(20, 140, 80) : color(185));
+  strokeWeight(2);
+  fill(active ? color(50, 190, 115) : color(255));
+
+  rect(x, y, 44, 44, 8);
+
+  fill(active ? color(255) : color(45));
+  textAlign(CENTER, CENTER);
+  textSize(18);
+  text(label, x, y - 1);
+
+  rectMode(CORNER);
+}
+
+String getMovementText() {
+  // Never show a movement direction unless the
+  // encoder has detected movement.
+  if (!beamBroken) {
+    return "Robot Car Stopped";
+  }
+
+  // W/S are opposite directions; A/D are opposite
+  // directions. Resolve simultaneous key presses.
+  if ((wDown && sDown) || (aDown && dDown)) {
+    return "Robot Car Moving";
+  }
+
+  if (wDown && aDown) {
+    return "Robot Moving Forwards and Left";
+  }
+
+  if (wDown && dDown) {
+    return "Robot Moving Forwards and Right";
+  }
+
+  if (sDown && aDown) {
+    return "Robot Moving Backwards and Left";
+  }
+
+  if (sDown && dDown) {
+    return "Robot Moving Backwards and Right";
+  }
+
+  if (wDown) {
+    return "Robot Is Moving Forwards";
+  }
+
+  if (sDown) {
+    return "Robot Is Moving Backwards";
+  }
+
+  if (aDown) {
+    return "Robot Is Moving Left";
+  }
+
+  if (dDown) {
+    return "Robot Is Moving Right";
+  }
+
+  return "Robot Car Moving";
+}
+
+void drawDirectionPad() {
+  fill(50);
+  textAlign(CENTER);
+  textSize(14);
+  text("MOVEMENT", width / 2, 235);
+
+  fill(50);
+  textSize(12);
+
+  String movement = "NO KEYS PRESSED";
+
+  if ((wDown && sDown) || (aDown && dDown)) {
+    movement = "CONFLICTING KEYS";
+  } else if (wDown && aDown) {
+    movement = "FORWARDS + LEFT";
+  } else if (wDown && dDown) {
+    movement = "FORWARDS + RIGHT";
+  } else if (sDown && aDown) {
+    movement = "BACKWARDS + LEFT";
+  } else if (sDown && dDown) {
+    movement = "BACKWARDS + RIGHT";
+  } else if (wDown) {
+    movement = "FORWARDS";
+  } else if (sDown) {
+    movement = "BACKWARDS";
+  } else if (aDown) {
+    movement = "LEFT";
+  } else if (dDown) {
+    movement = "RIGHT";
+  }
+
+  text(movement, width / 2, 257);
+}
+
+void drawSpeedSlider() {
+  fill(50);
+  textAlign(LEFT);
+  textSize(14);
+  text("MOTOR SPEED", sliderX, 337);
+
+  textAlign(RIGHT);
+  text(speed + " / 255", sliderX + sliderW, 337);
+
+  stroke(195);
+  strokeWeight(6);
+  line(sliderX, sliderY, sliderX + sliderW, sliderY);
+
+  stroke(35, 125, 210);
+  line(sliderX, sliderY,
+       sliderX + sliderW * speed / 255.0, sliderY);
+
+  noStroke();
+  fill(35, 125, 210);
+  ellipse(sliderX + sliderW * speed / 255.0,
+          sliderY, 20, 20);
+
+  fill(100);
+  textAlign(LEFT);
+  textSize(11);
+  text("0", sliderX, sliderY + 25);
+
+  textAlign(RIGHT);
+  text("255", sliderX + sliderW, sliderY + 25);
+}
+
+void drawStatus(int left, int right) {
+  // Actual movement status
+  textAlign(CENTER, CENTER);
+  textSize(17);
+
+  if (beamBroken) {
+    fill(20, 145, 70);
+  } else {
+    fill(120);
+  }
+
+  text(getMovementText(), width / 2, 290);
+
+  // Motor readings
+  stroke(220);
+  strokeWeight(1);
+  line(40, 455, 460, 455);
+
+  fill(50);
+  textAlign(LEFT);
+  textSize(12);
+  text("Left motor:  " + left, 55, 477);
+  text("Right motor: " + right, 260, 477);
+
+  fill(arduino != null ? color(25, 135, 75)
+                       : color(200, 60, 60));
+
+  textSize(11);
+  text(statusText, 55, 499);
+}
+
+void keyPressed() {
+  if (key == CODED) return;
+
+  if (key == 'w' || key == 'W') wDown = true;
+  if (key == 'a' || key == 'A') aDown = true;
+  if (key == 's' || key == 'S') sDown = true;
+  if (key == 'd' || key == 'D') dDown = true;
+}
+
+void keyReleased() {
+  if (key == CODED) return;
+
+  if (key == 'w' || key == 'W') wDown = false;
+  if (key == 'a' || key == 'A') aDown = false;
+  if (key == 's' || key == 'S') sDown = false;
+  if (key == 'd' || key == 'D') dDown = false;
+}
+
+void mousePressed() {
+  if (mouseY >= sliderY - 15 && mouseY <= sliderY + 15 &&
+      mouseX >= sliderX && mouseX <= sliderX + sliderW) {
+    draggingSlider = true;
+    updateSlider();
+  }
+}
+
+void mouseDragged() {
+  if (draggingSlider) updateSlider();
+}
+
+void mouseReleased() {
+  draggingSlider = false;
+}
+
+void updateSlider() {
+  speed = round(map(constrain(mouseX, sliderX, sliderX + sliderW),
+                    sliderX, sliderX + sliderW, 0, 255));
+}
