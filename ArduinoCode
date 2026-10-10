@@ -1,0 +1,149 @@
+
+#include <string.h>
+#include <stdlib.h>
+
+// Motor pins
+const int ENA = 9;
+const int IN1 = 8;
+const int IN2 = 7;
+
+const int IN3 = 5;
+const int IN4 = 4;
+const int ENB = 3;
+
+// Encoder / beam-break sensor output pins
+const int ENCODER_A = 12;
+const int ENCODER_B = 13;
+
+// Keep your existing motor direction settings
+const bool FLIP_A = false;
+const bool FLIP_B = true;
+
+// Set to LOW instead if your sensors output LOW
+// when the beam is broken.
+const int BEAM_BROKEN_LEVEL = HIGH;
+
+int LAST_BEAM_LEVEL1 = HIGH; // Keeps track of the last beam
+int LAST_BEAM_LEVEL2 = HIGH; // Keeps track of the last beam
+
+int leftSpeed = 0;
+int rightSpeed = 0;
+
+char inputBuffer[32];
+byte inputIndex = 0;
+
+unsigned long lastSensorReport = 0;
+const unsigned long SENSOR_REPORT_INTERVAL = 200;
+
+void setup() {
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  pinMode(ENB, OUTPUT);
+
+  pinMode(ENCODER_A, INPUT);
+  pinMode(ENCODER_B, INPUT);
+
+  Serial.begin(2000000);
+  stopMotors();
+}
+
+// Motor power: -255 to 255
+void motorA(int power) {
+  if (FLIP_A) power = -power;
+
+  digitalWrite(IN1, power > 0 ? HIGH : LOW);
+  digitalWrite(IN2, power < 0 ? HIGH : LOW);
+  analogWrite(ENA, abs(power));
+}
+
+void motorB(int power) {
+  if (FLIP_B) power = -power;
+
+  digitalWrite(IN3, power > 0 ? HIGH : LOW);
+  digitalWrite(IN4, power < 0 ? HIGH : LOW);
+  analogWrite(ENB, abs(power));
+}
+
+void setMotors(int left, int right) {
+  leftSpeed = constrain(left, -255, 255);
+  rightSpeed = constrain(right, -255, 255);
+
+  motorA(leftSpeed);
+  motorB(rightSpeed);
+}
+
+void stopMotors() {
+  setMotors(0, 0);
+}
+
+// Read motor commands: leftSpeed,rightSpeed
+void processCommand(char *line) {
+  char *comma = strchr(line, ',');
+
+  if (comma == NULL) return;
+
+  *comma = '\0';
+
+  int left = atoi(line);
+  int right = atoi(comma + 1);
+
+  setMotors(left, right);
+}
+
+
+
+void readBeamSensors() {
+  static bool sensorChangedSinceReport = false;
+
+  int sensorA = digitalRead(ENCODER_A);
+  int sensorB = digitalRead(ENCODER_B);
+
+  // Remember any sensor change until the next report
+  if (sensorA != LAST_BEAM_LEVEL1 ||
+      sensorB != LAST_BEAM_LEVEL2) {
+    sensorChangedSinceReport = true;
+  }
+
+  // Report every 200 ms
+  if (millis() - lastSensorReport >= SENSOR_REPORT_INTERVAL) {
+    if (sensorChangedSinceReport) {
+      Serial.println("BEAM_BROKEN");  // Robot Car Moving
+    } else {
+      Serial.println("BEAM_CLEAR");   // Robot Car Stopped
+    }
+
+    // Reset after reporting
+    sensorChangedSinceReport = false;
+    lastSensorReport = millis();
+  }
+
+  // Save current readings
+  LAST_BEAM_LEVEL1 = sensorA;
+  LAST_BEAM_LEVEL2 = sensorB;
+}
+
+void loop() {
+  // Keep reading incoming motor commands.
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+
+    if (c == '\n') {
+      inputBuffer[inputIndex] = '\0';
+      processCommand(inputBuffer);
+      inputIndex = 0;
+    }
+    else if (c != '\r') {
+      if (inputIndex < sizeof(inputBuffer) - 1) {
+        inputBuffer[inputIndex++] = c;
+      } else {
+        inputIndex = 0;
+      }
+    }
+  }
+
+  // Monitor both beam sensors.
+  readBeamSensors();
+}
